@@ -6,9 +6,9 @@ import folium
 from streamlit_folium import st_folium
 from folium.plugins import MarkerCluster
 import re
+import json
 import numpy as np
 import datetime
-import json
 from fpdf import FPDF
 from io import BytesIO
 import tempfile
@@ -17,12 +17,12 @@ import googlemaps
 from datetime import datetime, timedelta
 import time
 
-st.set_page_config(layout="wide", initial_sidebar_state="collapsed")
-# Configuração da página
+# REMOVA esta dupla configuração - deixe apenas UMA:
 st.set_page_config(
     page_title="Dashboard de Obras",
     page_icon="⚡",
-    layout="wide"
+    layout="wide",
+    initial_sidebar_state="collapsed"
 )
 
 # CSS personalizado
@@ -89,6 +89,7 @@ def encontrar_coluna(df, padroes):
             if re.search(padrao, str(col), re.IGNORECASE):
                 return col
     return None
+
 # Adicione esta função ANTES do seu main()
 def compact_layout():
     import streamlit.components.v1 as components
@@ -110,7 +111,7 @@ def compact_layout():
         }, 100);
     </script>
     """, height=0)
-    # [...] resto do seu código
+
 # Função para aplicar filtros
 @st.cache_data
 def aplicar_filtros(df, colunas, filtros):
@@ -147,11 +148,11 @@ def carregar_dados():
     try:
         # Primeiro tenta ler como .xlsx
         timestamp = os.path.getmtime("dados.xlsx")
-        return pd.read_excel("dados.xlsx", engine='openpyxl')
+        df = pd.read_excel("dados.xlsx", engine='openpyxl')
     except:
         try:
             # Se falhar, tenta como .xls
-            return pd.read_excel("dados.xls", engine='xlrd')
+            df = pd.read_excel("dados.xls", engine='xlrd')
         except Exception as e:
             st.error(f"Erro ao ler o arquivo: {e}")
             st.error("Verifique:")
@@ -169,17 +170,112 @@ def carregar_dados():
                 pass
     return df
 
-# Carregar dados JSON
+# Carregar dados JSON com tratamento robusto
 @st.cache_data(ttl=60)
 def carregar_json():
     try:
-        timestamp = os.path.getmtime("bd.json")
+        # Verificar se arquivo existe
+        if not os.path.exists("bd.json"):
+            st.warning("Arquivo bd.json não encontrado. Criando arquivo vazio...")
+            with open('bd.json', 'w', encoding='utf-8') as f:
+                json.dump([], f, indent=4, ensure_ascii=False)
+            return pd.DataFrame()
+        
+        # Verificar se arquivo está vazio
+        if os.path.getsize("bd.json") == 0:
+            st.warning("Arquivo bd.json está vazio.")
+            return pd.DataFrame()
+        
+        # Ler e processar o arquivo
         with open('bd.json', 'r', encoding='utf-8') as f:
-            dados = json.load(f)
-        return pd.DataFrame(dados)
+            conteudo = f.read().strip()
+            
+            if not conteudo:
+                return pd.DataFrame()
+            
+            # Carregar JSON
+            dados = json.loads(conteudo)
+            
+            # Converter objeto único para array
+            if isinstance(dados, dict):
+                dados = [dados]
+            
+            # Processar dados para DataFrame
+            df = pd.DataFrame(dados)
+            
+            # Converter tipos de dados
+            if 'DATA' in df.columns:
+                df['DATA'] = pd.to_datetime(df['DATA'], format='%d/%m/%Y', errors='coerce')
+            
+            # Converter colunas numéricas
+            colunas_numericas = ['LOCAÇÃO', 'CAV PREV', 'CAVA REAL', 'POSTE PREV', 'POSTE REAL', 'TOTAL POSTE']
+            for col in colunas_numericas:
+                if col in df.columns:
+                    df[col] = pd.to_numeric(df[col], errors='coerce')
+            
+            # Substituir NaN por valores apropriados
+            df = df.fillna({
+                'LOCAÇÃO': 0,
+                'CAV PREV': 0,
+                'CAVA REAL': 0,
+                'POSTE PREV': 0,
+                'POSTE REAL': 0,
+                'TOTAL POSTE': 0,
+                'JUSTIFICATIVA': ''
+            })
+            
+            return df
+            
+    except json.JSONDecodeError as e:
+        st.error(f"❌ Erro na formatação do JSON: {e}")
+        return pd.DataFrame()
+        
     except Exception as e:
-        st.error(f"Erro ao carregar bd.json: {e}")
-        return None
+        st.error(f"❌ Erro inesperado ao carregar JSON: {e}")
+        return pd.DataFrame()
+
+# FUNÇÃO CALCULAR RENDIMENTO DEFINIDA FORA DO MAIN
+def calcular_rendimento(row, col_json):
+    try:
+        # Obter nomes reais das colunas
+        col_atividade = col_json['atividade']
+        col_justificativa = col_json['justificativa']
+        
+        # Obter valores
+        atividade = str(row.get(col_atividade, '')).upper().strip()
+        justificativa = str(row.get(col_justificativa, '')).upper().strip()
+        
+        # Debug (descomente para ver)
+        # print(f"DEBUG: Atividade='{atividade}', Justificativa='{justificativa}'")
+        
+        # Termos que automaticamente dão 100%
+        termos_100 = [
+            'ENERGIZAÇÃO', 'ENERGIZACAO', 'ENERGIZADA', 'ENERGIZADO',
+            'DESLIGAMENTO', 'DESLIGADA', 'DESLIGADO', 
+            'LIGAMENTO', 'LIGADA', 'LIGADO', 'LIGAÇÃO',
+            'IMPLANTAÇÃO', 'IMPLANTACAO', 'IMPLANTADA', 'IMPLANTADO',
+            'ESCAVAÇÃO', 'ESCAVACAO', 'ESCAVADA', 'ESCAVADO',
+            'LANÇAMENTO', 'LANCAMENTO', 'LANÇADA', 'LANCADA',
+            'LOCAÇÃO', 'LOCACAO', 'LOCADA', 'LOCADO',
+            'POSTE', 'POSTES', 'CAVA', 'CAVAS',
+            'CONCLUSÃO', 'CONCLUSAO', 'CONCLUIDO', 'CONCLUÍDO'
+        ]
+        
+        # Verificar se qualquer termo está presente
+        texto_completo = f"{atividade} {justificativa}"
+        for termo in termos_100:
+            if termo in texto_completo:
+                return 100.0
+        
+        # Verificação direta
+        if atividade and justificativa and atividade in justificativa:
+            return 100.0
+        
+        return 0.0
+        
+    except Exception as e:
+        print(f"Erro ao calcular rendimento: {e}")
+        return 0.0
 
 # Seção de Produtividade de Carreteiros
 def carreteiros_section():
@@ -315,11 +411,13 @@ def carreteiros_section():
         st.table(resultados_df)
 
 # Interface principal
-if st.button("🔄 Recarregar Dados Manualmente"):
-    st.cache_data.clear()
-    st.rerun()
 def main():
     compact_layout()
+    
+    if st.button("🔄 Recarregar Dados Manualmente"):
+        st.cache_data.clear()
+        st.rerun()
+    
     col1, col2 = st.columns([4, 1])
     with col1:
         st.markdown("<h1 style='margin:16px;padding:12px'>📈 Dashboard de Progresso de Obras </h1>", unsafe_allow_html=True)
@@ -327,6 +425,7 @@ def main():
         st.image("WhatsApp_Image_2025-03-13_at_13.58.59__2_-removebg-preview.png", width=100)
 
     st.markdown("<hr style='margin:0.5rem 0'>", unsafe_allow_html=True)
+    
     # Carregar dados
     df = carregar_dados()
     if df is None:
@@ -439,7 +538,6 @@ def main():
         </div>
         ''', unsafe_allow_html=True)
 
-    
     with cols[2]:
         st.markdown('''
         <div class="metric-card">
@@ -624,11 +722,11 @@ def main():
     else:
         st.warning("Dados de mapa não disponíveis (necessárias colunas LATITUDE, LONGITUDE e SITUAÇÃO)")
 
-   # RELATÓRIO DE RENDIMENTO DIÁRIO# 
-    if df_json is not None:
+    # RELATÓRIO DE RENDIMENTO DIÁRIO
+    if df_json is not None and not df_json.empty:
         st.subheader("📊 Relatório de Rendimento Diário")
         
-        col_json = {
+        col_json_config = {
             'data': encontrar_coluna(df_json, ['DATA', 'DIA']),
             'supervisor': encontrar_coluna(df_json, ['SUPERVISOR', 'RESPONSAVEL']),
             'encarregado': encontrar_coluna(df_json, ['ENCARREGADO', 'LIDER']),
@@ -649,15 +747,15 @@ def main():
         }
         
         # Aplicar os filtros principais
-        df_json_filtrado = aplicar_filtros(df_json, col_json, filtros)
+        df_json_filtrado = aplicar_filtros(df_json, col_json_config, filtros)
         
         # Filtro de período específico para o relatório diário
-        if col_json['data']:
+        if col_json_config['data']:
             # Converter coluna de data para datetime
-            df_json_filtrado[col_json['data']] = pd.to_datetime(df_json_filtrado[col_json['data']], dayfirst=True, errors='coerce')
+            df_json_filtrado[col_json_config['data']] = pd.to_datetime(df_json_filtrado[col_json_config['data']], dayfirst=True, errors='coerce')
             
             # Remover linhas com datas inválidas
-            df_json_filtrado = df_json_filtrado.dropna(subset=[col_json['data']])
+            df_json_filtrado = df_json_filtrado.dropna(subset=[col_json_config['data']])
             
             # Definir opções de período
             opcoes_periodo = {
@@ -687,87 +785,48 @@ def main():
                 if periodo_selecionado == "Este mês":
                     # Filtrar para o mês atual
                     df_json_filtrado = df_json_filtrado[
-                        (df_json_filtrado[col_json['data']].dt.month == hoje.month) &
-                        (df_json_filtrado[col_json['data']].dt.year == hoje.year)
+                        (df_json_filtrado[col_json_config['data']].dt.month == hoje.month) &
+                        (df_json_filtrado[col_json_config['data']].dt.year == hoje.year)
                     ]
                 else:
                     # Filtrar pelos últimos X dias
                     data_inicial = hoje - timedelta(days=dias-1)
                     df_json_filtrado = df_json_filtrado[
-                        (df_json_filtrado[col_json['data']].dt.date >= data_inicial)
+                        (df_json_filtrado[col_json_config['data']].dt.date >= data_inicial)
                     ]
         
-        # Restante do código permanece igual...
-        if None in [col_json['atividade'], col_json['total_poste']]:
+        if None in [col_json_config['atividade'], col_json_config['total_poste']]:
             st.error("Colunas essenciais não encontradas no JSON")
         else:
             colunas_relatorio = [
-                col_json['data'], col_json['supervisor'], col_json['encarregado'],
-                col_json['projeto'], col_json['titulo'], col_json['municipio'],
-                col_json['atividade'], col_json['total_poste']
+                col_json_config['data'], col_json_config['supervisor'], col_json_config['encarregado'],
+                col_json_config['projeto'], col_json_config['titulo'], col_json_config['municipio'],
+                col_json_config['atividade'], col_json_config['total_poste']
             ]
             
             for col in ['locacao', 'cava_prev', 'cava_real', 'poste_prev', 'poste_real', 'justificativa']:
-                if col_json.get(col):
-                    colunas_relatorio.append(col_json[col])
+                if col_json_config.get(col):
+                    colunas_relatorio.append(col_json_config[col])
             
             df_relatorio = df_json_filtrado[colunas_relatorio].copy()
             
-            if col_json['data']:
+            if col_json_config['data']:
                 try:
-                    df_relatorio[col_json['data']] = pd.to_datetime(df_relatorio[col_json['data']], dayfirst=True)
+                    df_relatorio[col_json_config['data']] = pd.to_datetime(df_relatorio[col_json_config['data']], dayfirst=True)
                 except:
                     pass
             
             for col in ['locacao', 'cava_prev', 'cava_real', 'poste_prev', 'poste_real', 'total_poste']:
-                if col_json.get(col):
-                    df_relatorio[col_json[col]] = pd.to_numeric(df_relatorio[col_json[col]], errors='coerce').fillna(0).astype(int)
+                if col_json_config.get(col):
+                    df_relatorio[col_json_config[col]] = pd.to_numeric(df_relatorio[col_json_config[col]], errors='coerce').fillna(0).astype(int)
             
-            def calcular_rendimento(row):
-                try:
-                    atividade = str(row.get(col_json['atividade'], '')).upper()
-                    justificativa = str(row.get(col_json.get('justificativa', ''), '')).upper()
-                    
-                    if atividade and justificativa and atividade in justificativa:
-                        return 100.0
-                    
-                    termos = {
-                        'DESCARGA': ['DESCARGA'],
-                        'RETIRADA': ['RETIRADA DE POSTES', 'RETIRADA POSTES', 'RETIRADA'],
-                        'ENERGIZAÇÃO': ['ENERGIZAÇÃO', 'ENERGIZACAO'],
-                        'LANÇAMENTO': ['LANÇAMENTO', 'LANCAMENTO']
-                    }
-                    
-                    for termo_chave, lista_termos in termos.items():
-                        if any(t in atividade for t in lista_termos) and any(t in justificativa for t in lista_termos):
-                            return 100.0
-                    
-                    if 'LOCAÇÃO' in atividade or 'LOCACAO' in atividade:
-                        if col_json['locacao'] and col_json['total_poste']:
-                            loc_real = row.get(col_json['locacao'], 0)
-                            total = row.get(col_json['total_poste'], 1)
-                            return min((loc_real / total) * 100, 100) if total > 0 else 0
-                    
-                    if 'ESCAVAÇÃO' in atividade or 'ESCAVACAO' in atividade:
-                        if col_json['cava_prev'] and col_json['cava_real']:
-                            real = row.get(col_json['cava_real'], 0)
-                            prev = row.get(col_json['cava_prev'], 1)
-                            return min((real / prev) * 100, 100) if prev > 0 else 0
-                    
-                    if 'IMPLANTAÇÃO' in atividade or 'IMPLANTACAO' in atividade:
-                        if col_json['poste_prev'] and col_json['poste_real']:
-                            real = row.get(col_json['poste_real'], 0)
-                            prev = row.get(col_json['poste_prev'], 1)
-                            return min((real / prev) * 100, 100) if prev > 0 else 0
-                    
-                    return 0.0
-                except Exception as e:
-                    st.error(f"Erro ao calcular rendimento: {str(e)}")
-                    return 0.0
+            # AGORA CHAMA A FUNÇÃO CORRETA passando col_json_config
+            df_relatorio['RENDIMENTO %'] = df_relatorio.apply(
+                lambda row: calcular_rendimento(row, col_json_config), 
+                axis=1
+            ).round(1)
             
-            df_relatorio['RENDIMENTO %'] = df_relatorio.apply(calcular_rendimento, axis=1).round(1)
-            
-            df_relatorio = df_relatorio.sort_values(col_json['data'], ascending=False)
+            df_relatorio = df_relatorio.sort_values(col_json_config['data'], ascending=False)
             
             def colorir_linhas(row):
                 rendimento = row.get('RENDIMENTO %', 0)
@@ -787,7 +846,7 @@ def main():
                 height=600,
                 use_container_width=True,
                 column_config={
-                    col_json['data']: st.column_config.DateColumn("DATA", format="DD/MM/YYYY"),
+                    col_json_config['data']: st.column_config.DateColumn("DATA", format="DD/MM/YYYY"),
                     "RENDIMENTO %": st.column_config.ProgressColumn(
                         "RENDIMENTO %",
                         format="%.1f%%",
@@ -798,6 +857,8 @@ def main():
                 },
                 hide_index=True
             )
+    else:
+        st.warning("Nenhum dado disponível no relatório diário (bd.json)")
     
     # Seção de carreteiros
     carreteiros_section()

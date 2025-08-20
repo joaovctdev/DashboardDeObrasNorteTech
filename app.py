@@ -322,7 +322,7 @@ def main():
     compact_layout()
     col1, col2 = st.columns([4, 1])
     with col1:
-        st.markdown("<h1 style='margin:16px;padding:12px'>📈 Dashboard de Progresso de Obras </h1>", unsafe_allow_html=True)
+        st.markdown("<h1 style='margin:16px;padding:12px'>📈 Dashboard de Progresso de Obras 2</h1>", unsafe_allow_html=True)
     with col2:
         st.image("WhatsApp_Image_2025-03-13_at_13.58.59__2_-removebg-preview.png", width=100)
 

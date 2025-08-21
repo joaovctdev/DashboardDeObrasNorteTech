@@ -66,10 +66,10 @@
    "CAV PREV": null,
    "CAVA REAL": null,
    "POSTE PREV": null,
-   "POSTE REAL": 1,
+   "POSTE REAL": null,
    "EVENTO": "EXECUTADO",
    "RESPONSAVEL": "EQUIPE",
-   "JUSTIFICATIVA": "EQUIPE INTERCALOU 1 N3 COM LV E LANÇOU 240MTS DE CABO"
+   "JUSTIFICATIVA": ""
  },
  {
    "DATA": "20/08/2025",
